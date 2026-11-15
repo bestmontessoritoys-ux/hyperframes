@@ -14,6 +14,7 @@ import {
   EDITING_REQUEST_KINDS,
   isPlainRecord,
   parseEditingRequest,
+  type EditingKeyMessage,
   type EditingParams,
   type EditingReply,
   type EditingRequestKind,
@@ -33,10 +34,13 @@ import { layersOf } from "./editingLayers";
 import { drawDrafts } from "./editingDraft";
 import { gestureStart } from "./editingGestureStart";
 import { getLogicalOpacity, servedToAnotherSite } from "../studioPreviewMark";
+import { matchCombo, parseCombo, type Combo } from "../keyCombo";
+import { shouldIgnorePlaybackShortcutTarget } from "../typingTarget";
 
 type Handlers = {
   [K in EditingRequestKind]: (
     params: EditingParams<K>,
+    port: MessagePort,
   ) => EditingResult<K> | Promise<EditingResult<K>>;
 };
 
@@ -46,6 +50,56 @@ function clipParents(nodes: readonly ClipNode[], out: Array<[string, string]> = 
     clipParents(node.children, out);
   }
   return out;
+}
+
+const keyWatches = new Map<MessagePort, { combos: Combo[]; down: Set<string> }>();
+
+function forwardKey(port: MessagePort, e: KeyboardEvent): void {
+  const { type, key, code, altKey, ctrlKey, metaKey, shiftKey, repeat } = e;
+  const message: EditingKeyMessage = {
+    v: EDITING_PROTOCOL_VERSION,
+    event: "key",
+    key: {
+      type: type === "keyup" ? "keyup" : "keydown",
+      key,
+      code,
+      altKey,
+      ctrlKey,
+      metaKey,
+      shiftKey,
+      repeat,
+    },
+  };
+  port.postMessage(message);
+}
+
+function onWatchedKeyDown(e: KeyboardEvent): void {
+  if (e.defaultPrevented || shouldIgnorePlaybackShortcutTarget(e.target)) return;
+  for (const [port, watch] of keyWatches) {
+    if (!watch.combos.some((combo) => matchCombo(e, combo))) continue;
+    e.preventDefault();
+    watch.down.add(e.code || e.key);
+    forwardKey(port, e);
+  }
+}
+
+function onWatchedKeyUp(e: KeyboardEvent): void {
+  for (const [port, watch] of keyWatches) {
+    if (watch.down.delete(e.code || e.key)) forwardKey(port, e);
+  }
+}
+
+function listenForKeys(on: boolean): void {
+  const method = on ? "addEventListener" : "removeEventListener";
+  window[method]("keydown", onWatchedKeyDown, true);
+  window[method]("keyup", onWatchedKeyUp, true);
+}
+
+function watchKeys(port: MessagePort, combos: string[]): { watching: number } {
+  if (combos.length === 0) keyWatches.delete(port);
+  else keyWatches.set(port, { combos: combos.map((text) => parseCombo(text)!), down: new Set() });
+  listenForKeys(keyWatches.size > 0);
+  return { watching: combos.length };
 }
 
 const HANDLERS: Handlers = {
@@ -93,6 +147,7 @@ const HANDLERS: Handlers = {
   layers: ({ group, offset }) => layersOf(group, offset),
   draft: ({ drafts }) => drawDrafts(drafts),
   "gesture-start": ({ handles }) => gestureStart(handles),
+  "watch-keys": ({ combos }, port) => watchKeys(port, combos),
 };
 
 function serve(port: MessagePort): void {
@@ -116,9 +171,9 @@ function serve(port: MessagePort): void {
       });
       return;
     }
-    const handler = HANDLERS[request.kind] as (params: unknown) => unknown;
+    const handler = HANDLERS[request.kind] as (params: unknown, port: MessagePort) => unknown;
     Promise.resolve()
-      .then(() => handler(request.params))
+      .then(() => handler(request.params, port))
       .then(
         (result) => reply({ v: EDITING_PROTOCOL_VERSION, id: request.id, ok: true, result }),
         (err: unknown) => reply(failure(request.id, err)),
@@ -168,6 +223,8 @@ export function installEditingAgent(parent: Window = window.parent): { dispose: 
       window.removeEventListener("message", onMessage);
       for (const port of ports) port.close();
       ports.clear();
+      keyWatches.clear();
+      listenForKeys(false);
     },
   };
 }
