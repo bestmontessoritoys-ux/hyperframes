@@ -761,7 +761,7 @@ export function localizeExternalAssets(
     fileContents,
     onDiskMinBytes,
     externalMap: new Map(),
-    usedArchivePaths: new Set(),
+    usedArchivePaths: new Set(fileContents.keys()),
     leftOut: new Set(),
     onLeftOut,
     onOutsideFile,
