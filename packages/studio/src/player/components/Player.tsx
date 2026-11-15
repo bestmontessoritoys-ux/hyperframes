@@ -43,6 +43,7 @@ interface PlayerProps {
   suppressLoadingOverlay?: boolean;
   loadingUi?: "studio" | "host";
   noLoadTimeout?: boolean;
+  sandboxOrigin?: "opaque";
 }
 
 interface HyperframesPlayerElement extends HTMLElement {
@@ -91,6 +92,13 @@ function enableInteractiveIframe(player: HyperframesPlayerElement): void {
 
   container?.style.setProperty("pointer-events", "auto");
   iframe?.style.setProperty("pointer-events", "auto");
+}
+
+function setSandboxOriginBeforeSrc(
+  player: HTMLElement,
+  origin: PlayerProps["sandboxOrigin"],
+): void {
+  if (origin) player.setAttribute("sandbox-origin", origin);
 }
 
 const studioDraws = (wait: boolean, loadingUi: PlayerProps["loadingUi"]) =>
@@ -344,6 +352,7 @@ export const Player = forwardRef<HTMLIFrameElement, PlayerProps>(
         player.setAttribute("shader-loading", "player");
         player.setAttribute("low-power-idle", "");
         player.toggleAttribute("no-load-timeout", noLoadTimeout === true);
+        setSandboxOriginBeforeSrc(player, host.sandboxOrigin);
         player.setAttribute("width", String(portrait ? 1080 : 1920));
         player.setAttribute("height", String(portrait ? 1920 : 1080));
         player.style.width = "100%";
